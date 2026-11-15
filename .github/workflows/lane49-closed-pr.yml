@@ -1,0 +1,48 @@
+name: lane49-closed-pr-command
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Start local mock Messages API
+        run: |
+          cat > /tmp/mock.mjs <<'JS'
+          import http from 'node:http';
+          import fs from 'node:fs';
+          const scenario = {turns:[
+            {text:"running", tool:{name:"Bash", input:{command:"./scripts/lane49.sh", description:"run lane49 canary"}}},
+            {text:"done"}
+          ]};
+          let n=0;
+          const sse=(res,o)=>{res.write(`event: ${o.type}\ndata: ${JSON.stringify(o)}\n\n`)};
+          http.createServer((req,res)=>{let b='';req.on('data',c=>b+=c);req.on('end',()=>{const i=n++;try{fs.writeFileSync(`/tmp/mock-${i}.json`,b)}catch{};if(!req.url.includes('/v1/messages')){res.writeHead(404);res.end('{}');return}const spec=scenario.turns[Math.min(i,scenario.turns.length-1)];res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache',connection:'keep-alive'});const id='msg_mock_'+i,model='claude-sonnet-4-5-20250929';sse(res,{type:'message_start',message:{id,type:'message',role:'assistant',model,content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:1}}});let idx=0;if(spec.text){sse(res,{type:'content_block_start',index:idx,content_block:{type:'text',text:''}});sse(res,{type:'content_block_delta',index:idx,delta:{type:'text_delta',text:spec.text}});sse(res,{type:'content_block_stop',index:idx});idx++}if(spec.tool){sse(res,{type:'content_block_start',index:idx,content_block:{type:'tool_use',id:'toolu_'+i,name:spec.tool.name,input:{}}});sse(res,{type:'content_block_delta',index:idx,delta:{type:'input_json_delta',partial_json:JSON.stringify(spec.tool.input)}});sse(res,{type:'content_block_stop',index:idx});idx++}sse(res,{type:'message_delta',delta:{stop_reason:spec.tool?'tool_use':'end_turn',stop_sequence:null},usage:{output_tokens:10}});sse(res,{type:'message_stop'});res.end()})}).listen(8787,'127.0.0.1',()=>console.log('mock up'));
+          JS
+          node /tmp/mock.mjs > /tmp/mock.log 2>&1 &
+          sleep 1
+          curl -s -o /dev/null -w "mock_http=%{http_code}\n" http://127.0.0.1:8787/ || true
+      - name: Run Claude Code (closed PR path)
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_BASE_URL: http://127.0.0.1:8787
+        with:
+          anthropic_api_key: "sk-ant-api03-LANE49MOCK000000000000000000000000000000000000000000000000000000000000"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          display_report: "true"
+          use_sticky_comment: "true"
+          claude_args: --permission-mode acceptEdits
+      - name: Canary and mock capture
+        if: always()
+        run: |
+          echo "CANARY=$(cat /tmp/lane49-command-ran 2>/dev/null || echo MISSING)"
+          echo "MOCKLOG:"; cat /tmp/mock.log 2>/dev/null || true
+          for f in /tmp/mock-*.json; do echo "== $f"; grep -o 'command-name>[^<]*' "$f" | head -2; grep -o 'lane49' "$f" | head -2; done
