@@ -1,0 +1,32 @@
+name: lane49-comment-sink
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: "sk-ant-api03-LANE49SYNTHETICKEY0000000000000000000000000000000000000000000000000000000000"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          display_report: "false"
+          use_sticky_comment: "true"
+          track_progress: "true"
+      - name: Step summary size (display_report=false control)
+        if: always()
+        run: |
+          echo "SUMMARY_BYTES=$(wc -c < "$GITHUB_STEP_SUMMARY")"
+          echo "---SUMMARY-BEGIN---"
+          cat "$GITHUB_STEP_SUMMARY"
+          echo "---SUMMARY-END---"
